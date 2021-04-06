@@ -22,16 +22,16 @@ int main(int argc, char* argv[])
 {
 	Json json =
 	{
-		{"int"s, 12306},
-		{"double"s, 3.1415},
-		{"string"s, "hello world"},
-		{"vector"s, {1, 1, 2, 3, 5, 8, 11}},
-		{"map"s,
+		{"int", 12306},
+		{"double", 3.1415},
+		{"string", "hello world"},
+		{"vector", {1, 1, 2, 3, 5, 8, 11}},
+		{"map",
 		{
-			{"key1"s, 123},
-			{"key2"s, 0.321},
-			{"key3"s, "balabala"s},
-			{"key4"s, {1, 2.0, "a"s}}
+			{"key1", 123},
+			{"key2", 0.321},
+			{"key3", "balabala"},
+			{"key4", {1, 2.0, "a"}}
 		}}
 	};
 
@@ -62,10 +62,10 @@ int main(int argc, char* argv[])
 	Json json = 123;
 
 	json = {
-		{"key"s, 3.14}
+		{"key", 3.14}
 	};
 
-	json["key"s] = "value";
+	json["key"] = "value";
 
 	return 0;
 }
