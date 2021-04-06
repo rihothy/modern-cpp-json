@@ -1,433 +1,495 @@
 #ifndef __JSON_HPP__
 #define __JSON_HPP__
 
+#include <initializer_list>
 #include <unordered_map>
-#include <algorithm>
 #include <stdexcept>
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <vector>
+#include <variant>
 #include <memory>
+#include <vector>
+#include <string>
+#include <cctype>
 
-enum class Type
+#include "io.hpp"
+
+class Json
 {
-    NONE,
-    INT,
-    DOUBLE,
-    STR,
-    VEC,
-    MAP
-};
+	using null = void*;
+	using str = std::string;
+	using vec = std::vector<std::shared_ptr<Json>>;
+	using dict = std::unordered_map<std::string, std::shared_ptr<Json>>;
 
-class Ele
-{
-    using str = std::string;
-    using vec = std::vector<std::shared_ptr<Ele>>;
-    using map = std::unordered_map<std::string, std::shared_ptr<Ele>>;
-
-    Type type = Type::NONE;
-
-    int v_int = 0;
-    double v_double = 0.0;
-    str v_str;
-    vec v_vec;
-    map v_map;
-
-private:
-
-    static std::vector<str> split(const str& s)
-    {
-        int cnt1 = 0, cnt2 = 0;
-        std::vector<str> words;
-        bool is_str = false;
-        str word;
-
-        for (auto i = 0; i < s.length(); ++i)
-        {
-            if (s[i] == '"' && (!i || s[i] != '\\'))
-            {
-                is_str = !is_str;
-                word += s[i];
-            }
-            else
-            {
-                if (is_str)
-                {
-                    word += s[i];
-                }
-                else
-                {
-                    switch (s[i])
-                    {
-                    case '[':
-                        ++cnt1;
-                        break;
-                    case ']':
-                        --cnt1;
-                        break;
-                    case '{':
-                        ++cnt2;
-                        break;
-                    case '}':
-                        --cnt2;
-                        break;
-                    case ',':
-                    case ':':
-                        if (!cnt1 && !cnt2)
-                        {
-                            words.push_back(word);
-                            word = "";
-                        }
-                        break;
-                    default:
-                        break;
-                    }
-
-                    if ((cnt1 || cnt2) || s[i] != ',' && s[i] != ':')
-                    {
-                        word += s[i];
-                    }
-                }
-            }
-        }
-
-        if (not word.empty())
-        {
-            words.push_back(word);
-        }
-
-        return words;
-    }
+	std::string raw_type = typeid(null).name();
+	std::variant<null, bool, int, double, str, vec, dict> val = nullptr;
 
 public:
 
-    Ele(void) = default;
+	Json(void) = default;
 
-    template<class T>
-    Ele(const T v)
-    {
-        if constexpr (std::is_integral_v<T>)
-        {
-            type = Type::INT;
-            v_int = v;
-        }
-        else if constexpr (std::is_floating_point_v<T>)
-        {
-            type = Type::DOUBLE;
-            v_double = v;
-        }
-        else if constexpr (std::is_same_v<T, str>)
-        {
-            type = Type::STR;
-            v_str = v;
-        }
-        else if constexpr (std::is_same_v<T, vec>)
-        {
-            type = Type::VEC;
-            v_vec = v;
-        }
-        else if constexpr (std::is_same_v<T, map>)
-        {
-            type = Type::MAP;
-            v_map = v;
-        }
-        else if constexpr (std::is_same_v<T, Ele>)
-        {
-            type = v.type;
-            v_int = v.v_int;
-            v_double = v.v_double;
-            v_str = v.v_str;
-            v_vec = v.v_vec;
-            v_map = v.v_map;
-        }
-    }
+	template<class T>
+	Json(const T& v)
+	{
+		*this = v;
+	}
 
-    Ele(const std::initializer_list<Ele>& list)
-    {
-        bool is_map = true;
+	Json(const std::initializer_list<Json>& list)
+	{
+		auto is_dict = true;
 
-        for (const auto& ele : list)
-        {
-            if (not (ele.type == Type::VEC && ele.size() == 2 && ele.v_vec[0]->type == Type::STR))
-            {
-                is_map = false;
-                break;
-            }
-        }
+		for (const auto& ele : list)
+		{
+			if (ele.type() != "vec" || ele.size() != 2 || ele[0].type() != "str")
+			{
+				is_dict = false;
+				break;
+			}
+		}
 
-        if (is_map)
-        {
-            type = Type::MAP;
+		if (is_dict)
+		{
+			raw_type = typeid(dict).name();
+			val = dict();
 
-            for (const auto& ele : list)
-            {
-                v_map.insert(std::make_pair(ele.v_vec[0]->v_str, std::make_shared<Ele>(*ele.v_vec[1])));
-            }
-        }
-        else
-        {
-            type = Type::VEC;
+			for (const auto& ele : list)
+			{
+				std::get<dict>(val).insert(std::make_pair(str(ele[0]), std::make_shared<Json>(ele[1])));
+			}
+		}
+		else
+		{
+			raw_type = typeid(vec).name();
+			val = vec();
 
-            for (const auto& ele : list)
-            {
-                v_vec.push_back(std::make_shared<Ele>(ele));
-            }
-        }
-    }
+			for (const auto& ele : list)
+			{
+				std::get<vec>(val).push_back(std::make_shared<Json>(ele));
+			}
+		}
+	}
 
-    operator int() const
-    {
-        switch (type)
-        {
-        case Type::INT:
-            return v_int;
-        case Type::DOUBLE:
-            return int(v_double);
-        case Type::STR:
-            return std::stoi(v_str);
-        default:
-            throw std::bad_cast();
-        }
-    }
+	Json(const Json& another)
+	{
+		*this = another;
+	}
 
-    operator double() const
-    {
-        switch (type)
-        {
-        case Type::INT:
-            return double(v_int);
-        case Type::DOUBLE:
-            return v_double;
-        case Type::STR:
-            return std::stod(v_str);
-        default:
-            throw std::bad_cast();
-        }
-    }
+	Json(Json&& another) noexcept
+	{
+		*this = std::move(another);
+	}
 
-    operator str() const
-    {
-        switch (type)
-        {
-        case Type::INT:
-            return std::to_string(v_int);
-        case Type::DOUBLE:
-            return std::to_string(v_double);
-        case Type::STR:
-            return v_str;
-        default:
-            throw std::bad_cast();
-        }
-    }
+	template<class T>
+	auto& operator=(const T& v)
+	{
+		if constexpr (std::is_null_pointer_v<T>)
+		{
+			val = v;
+			raw_type = typeid(null).name();
+		}
+		else if constexpr (std::is_same_v<T, bool>)
+		{
+			val = v;
+			raw_type = typeid(bool).name();
+		}
+		else if constexpr (std::is_integral_v<T>)
+		{
+			val = int(v);
+			raw_type = typeid(int).name();
+		}
+		else if constexpr (std::is_floating_point_v<T>)
+		{
+			val = double(v);
+			raw_type = typeid(double).name();
+		}
+		else if constexpr (std::is_array_v<T> || std::is_pointer_v<T>)
+		{
+			*this = std::string(v);
+		}
+		else
+		{
+			val = v;
+			raw_type = typeid(T).name();
+		}
 
-    template<class T>
-    auto& operator[](T v)
-    {
-        if constexpr (std::is_integral_v<T>)
-        {
-            if (type == Type::VEC || type == Type::NONE)
-            {
-                type = Type::VEC;
+		return *this;
+	}
 
-                if (v < 0)
-                {
-                    v = v_vec.size() + v;
-                }
+	Json& operator=(const Json& another)
+	{
+		if (&another != this)
+		{
+			raw_type = another.raw_type;
+			val = another.val;
+		}
 
-                if (v < 0)
-                {
-                    throw std::out_of_range("");
-                }
+		return *this;
+	}
 
-                while (v_vec.size() <= v)
-                {
-                    v_vec.push_back(std::make_shared<Ele>());
-                }
+	Json& operator=(Json&& another) noexcept
+	{
+		if (&another != this)
+		{
+			raw_type = another.raw_type;
+			val = std::move(another.val);
 
-                return *v_vec[v];
-            }
-        }
-        else if constexpr (std::is_same_v<T, str>)
-        {
-            if (type == Type::MAP || type == Type::NONE)
-            {
-                type = Type::MAP;
+			another.raw_type = typeid(null).name();
+			another.val = nullptr;
+		}
 
-                if (not v_map.count(v))
-                {
-                    v_map.insert(std::make_pair(v, std::make_shared<Ele>()));
-                }
+		return *this;
+	}
 
-                return *v_map[v];
-            }
-        }
+	operator bool() const
+	{
+		if (type() == "null")
+		{
+			return false;
+		}
+		else if (type() == "bool")
+		{
+			return std::get<bool>(val);
+		}
+		else if (type() == "int")
+		{
+			return std::get<int>(val);
+		}
+		else if (type() == "double")
+		{
+			return std::get<double>(val);
+		}
+		else if (type() == "str")
+		{
+			return !std::get<str>(val).empty();
+		}
+		else if (type() == "vec")
+		{
+			return !std::get<vec>(val).empty();
+		}
+		else if (type() == "dict")
+		{
+			return !std::get<dict>(val).empty();
+		}
+	}
 
-        throw std::bad_cast();
-    }
+	operator int() const
+	{
+		if (type() == "null")
+		{
+			return 0;
+		}
+		else if (type() == "bool")
+		{
+			return std::get<bool>(val);
+		}
+		else if (type() == "int")
+		{
+			return std::get<int>(val);
+		}
+		else if (type() == "double")
+		{
+			return std::get<double>(val);
+		}
+		else if (type() == "str")
+		{
+			return std::stoi(std::get<str>(val));
+		}
+	}
 
-    size_t size(void) const
-    {
-        if (type == Type::VEC)
-        {
-            return v_vec.size();
-        }
-        else if (type == Type::MAP)
-        {
-            return v_map.size();
-        }
+	operator double() const
+	{
+		if (type() == "null")
+		{
+			return 0;
+		}
+		else if (type() == "bool")
+		{
+			return std::get<bool>(val);
+		}
+		else if (type() == "int")
+		{
+			return std::get<int>(val);
+		}
+		else if (type() == "double")
+		{
+			return std::get<double>(val);
+		}
+		else if (type() == "str")
+		{
+			return std::stod(std::get<str>(val));
+		}
+	}
 
-        return 0;
+	operator str() const
+	{
+		if (type() == "null")
+		{
+			return "null";
+		}
+		else if (type() == "bool")
+		{
+			return std::get<bool>(val) ? "true" : "false";
+		}
+		else if (type() == "int")
+		{
+			return std::to_string(std::get<int>(val));
+		}
+		else if (type() == "double")
+		{
+			return std::to_string(std::get<double>(val));
+		}
+		else if (type() == "str")
+		{
+			return std::get<str>(val);
+		}
+	}
 
-        throw std::logic_error("");
-    }
+	Json& operator[](int i)
+	{
+		if (i < 0)
+		{
+			i = this->size() + i;
+		}
 
-    friend std::ostream& operator<<(std::ostream& strm, const Ele& ele);
-    friend std::string dumps(const Ele& ele, int indent, int cur_indent);
-    friend Ele loads(const std::string& s, bool strip);
-    friend Ele load(const std::string& path);
-    friend void dump(const Ele& ele, const std::string& path, int indent);
+		return *std::get<vec>(val)[i];
+	}
+
+	Json operator[](int i) const
+	{
+		if (i < 0)
+		{
+			i = this->size() + i;
+		}
+
+		return *std::get<vec>(val)[i];
+	}
+
+	Json& operator[](const str& k)
+	{
+		return *std::get<dict>(val)[k];
+	}
+
+	Json operator[](const str& k) const
+	{
+		return *std::get<dict>(val).at(k);
+	}
+
+	size_t size(void) const
+	{
+		if (type() == "vec")
+		{
+			return std::get<vec>(val).size();
+		}
+		else if (type() == "dict")
+		{
+			return std::get<dict>(val).size();
+		}
+	}
+
+	str type(void) const
+	{
+		if (raw_type == typeid(bool).name())
+		{
+			return "bool";
+		}
+		else if (raw_type == typeid(int).name())
+		{
+			return "int";
+		}
+		else if (raw_type == typeid(double).name())
+		{
+			return "double";
+		}
+		else if (raw_type == typeid(str).name())
+		{
+			return "str";
+		}
+		else if (raw_type == typeid(vec).name())
+		{
+			return "vec";
+		}
+		else if (raw_type == typeid(dict).name())
+		{
+			return "dict";
+		}
+		else
+		{
+			return "null";
+		}
+	}
+
+	friend str dumps(const Json& json, int indent, int cur_indent);
+	friend Json loads(const str& buff);
 };
 
-std::ostream& operator<<(std::ostream& strm, const Ele& ele)
+Json::str dumps(const Json& json, int indent = 0, int cur_indent = 0)
 {
-    return strm << dumps(ele, 0, 0);
+	Json::str buff;
+	bool first = true;
+	auto raw_indent = indent ? '\n' + std::string(cur_indent + indent, ' ') : "";
+
+	auto str2str = [](const auto& str)
+	{
+		std::string temp = "\"";
+
+		for (const auto& ch : str)
+		{
+			temp += ch == '"' ? "\\\"" : std::string(1, ch);
+		}
+
+		return temp + '"';
+	};
+
+	if (json.type() == "vec")
+	{
+		buff += "[" + raw_indent;
+
+		for (int i = 0; i < json.size(); ++i)
+		{
+			buff += (i ? "," + raw_indent : "") + dumps(json[i], indent, cur_indent + indent);
+		}
+
+		buff += (indent ? '\n' + std::string(cur_indent, ' ') : "") + ']';
+	}
+	else if (json.type() == "dict")
+	{
+		buff += '{' + raw_indent;
+
+		for (const auto& [k, ele] : std::get<Json::dict>(json.val))
+		{
+			buff += (first ? "" : "," + raw_indent) + str2str(k) + ": " + dumps(*ele, indent, cur_indent + indent);
+			first = false;
+		}
+
+		buff += (indent ? '\n' + std::string(cur_indent, ' ') : "") + '}';
+	}
+	else if (json.type() == "str")
+	{
+		buff = str2str(Json::str(json));
+	}
+	else
+	{
+		buff = Json::str(json);
+	}
+
+	return buff;
 }
 
-std::string dumps(const Ele& ele, int indent = 0, int cur_indent = 0)
+Json loads(const Json::str& buff)
 {
-    std::string s;
-    bool first = true;
+	int i = 0;
 
-    switch (ele.type)
-    {
-    case Type::NONE:
-        s = "none";
-        break;
-    case Type::INT:
-    case Type::DOUBLE:
-        s = std::string(ele);
-        break;
-    case Type::STR:
-        s = '"' + ele.v_str + '"';
-        break;
-    case Type::VEC:
-        s += '[';
+	auto skip = [&](const auto&... chs) -> void
+	{
+		while (((buff[i] == chs) || ...))
+		{
+			++i;
+		}
+	};
 
-        for (const auto& ele : ele.v_vec)
-        {
-            s += (first ? "" : ", ") + dumps(*ele, indent, indent ? cur_indent : 0);
-            first = false;
-        }
+	auto run = [&](auto&& self) -> Json
+	{
+		skip(' ', '\n', '\t');
 
-        s += ']';
-        break;
-    case Type::MAP:
-        auto now_indent = indent ? '\n' + std::string(cur_indent + indent, ' ') : "";
+		if (buff[i] == 'n')
+		{
+			i += 4;
+			return Json(nullptr);
+		}
+		else if (buff[i] == 't')
+		{
+			i += 4;
+			return Json(true);
+		}
+		else if (buff[i] == 'f')
+		{
+			i += 5;
+			return Json(false);
+		}
+		else if (buff[i] == '"')
+		{
+			Json::str temp;
 
-        s += '{';
-        s += now_indent;
+			while (buff[++i] != '"' || !++i)
+			{
+				if (buff[i] == '\\')
+				{
+					++i;
+				}
 
-        for (const auto& [k, ele] : ele.v_map)
-        {
-            s += (first ? "" : ", " + now_indent) + '"' + k + "\": " + dumps(*ele, indent, indent ? cur_indent + indent : 0);
-            first = false;
-        }
+				temp += buff[i];
+			}
 
-        s += (indent ? "\n" + std::string(cur_indent, ' ') : "") + '}';
-        break;
-    }
+			return Json(temp);
+		}
+		else if (buff[i] == '[')
+		{
+			Json json;
 
-    return s;
+			json.raw_type = typeid(Json::vec).name();
+			json.val = Json::vec();
+			skip(' ', '\n', '\t', '[');
+
+			while (buff[i] != ']' || !++i)
+			{
+				auto ele = self(self);
+
+				std::get<Json::vec>(json.val).push_back(std::make_shared<Json>(ele));
+				skip(' ', '\n', '\t', ',');
+			}
+
+			return json;
+		}
+		else if (buff[i] == '{')
+		{
+			Json json;
+
+			json.raw_type = typeid(Json::dict).name();
+			json.val = Json::dict();
+			skip(' ', '\n', '\t', '{');
+
+			while (buff[i] != '}' || !++i)
+			{
+				auto key = self(self);
+				skip(' ', '\n', '\t', ':');
+				auto ele = self(self);
+				skip(' ', '\n', '\t', ',');
+
+				std::get<Json::dict>(json.val).insert(std::make_pair(Json::str(key), std::make_shared<Json>(ele)));
+			}
+
+			return json;
+		}
+		else
+		{
+			Json::str temp;
+			bool is_float = false;
+
+			while (true)
+			{
+				if (isdigit(buff[i]) || buff[i] == '.')
+				{
+					temp += buff[i];
+				}
+				else
+				{
+					break;
+				}
+
+				is_float = is_float || buff[i] == '.';
+				++i;
+			}
+
+			if (is_float)
+			{
+				return Json(std::stod(temp));
+			}
+			else
+			{
+				return Json(std::stoi(temp));
+			}
+		}
+	};
+
+	return run(run);
 }
-
-Ele loads(const std::string& s, bool strip = true)
-{
-    Ele ele;
-    std::string temp;
-    std::vector<std::string> words;
-
-    if (strip)
-    {
-        for (const auto& ch : s)
-        {
-            if (ch != ' ' && ch != '\t' && ch != '\n')
-            {
-                temp += ch;
-            }
-        }
-    }
-    else
-    {
-        temp = s;
-    }
-
-    if (temp.empty())
-    {
-        return ele;
-    }
-
-    switch (temp[0])
-    {
-    case 'n':
-        return Ele();
-    case '"':
-        return Ele(temp.substr(1, temp.length() - 2));
-    case '[':
-        ele.type = Type::VEC;
-        temp = temp.substr(1, temp.length() - 2);
-        words = Ele::split(temp);
-
-        for (const auto& word : words)
-        {
-            ele.v_vec.push_back(std::make_shared<Ele>(loads(word, false)));
-        }
-        break;
-    case '{':
-        ele.type = Type::MAP;
-        temp = temp.substr(1, temp.length() - 2);
-        words = Ele::split(temp);
-
-        for (int i = 0; i < words.size(); i += 2)
-        {
-            ele.v_map.insert(std::make_pair(words[i].substr(1, words[i].length() - 2), std::make_shared<Ele>(loads(words[i + 1], false))));
-        }
-        break;
-    default:
-        if (temp.find('.') != std::string::npos)
-        {
-            return Ele(std::stod(temp));
-        }
-        else
-        {
-            return Ele(std::stoi(temp));
-        }
-    }
-
-    return ele;
-}
-
-void dump(const Ele& ele, const std::string& path, int indent = 0)
-{
-    std::ofstream ostrm(path);
-    std::string s = dumps(ele, indent, 0);
-
-    ostrm << s;
-}
-
-Ele load(const std::string& path)
-{
-    std::string s, line;
-    std::ifstream istrm(path);
-
-    while (std::getline(istrm, line))
-    {
-        s += line;
-    }
-
-    return loads(s);
-}
-
-using Json = Ele;
 
 #endif
